@@ -15,6 +15,7 @@ on:
       - '.github/workflows/wmcl.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - 'easytier/**'
       - 'easytier-rpc-build/**'
       - 'easytier-contrib/**'
@@ -50,6 +51,7 @@ jobs:
 
       - name: Add Android target
         run: |
+          # rust-toolchain.toml pins 1.95, so add the target for that toolchain.
           rustup target add aarch64-linux-android
           rustup target list --installed | grep android
 
@@ -111,16 +113,17 @@ jobs:
             target: x86_64-unknown-linux-gnu
             packages: protobuf-compiler
           - name: linux-aarch64
-            os: ubuntu-latest
+            # Native arm64 Linux runner: no cross linker needed.
+            os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            packages: protobuf-compiler gcc-aarch64-linux-gnu
-            linker: aarch64-linux-gnu-gcc
+            packages: protobuf-compiler
           - name: macos-x86_64
-            os: macos-13
+            # macos-13 has been retired; macos-latest builds both Darwin targets.
+            os: macos-latest
             target: x86_64-apple-darwin
             packages: protobuf
           - name: macos-arm64
-            os: macos-14
+            os: macos-latest
             target: aarch64-apple-darwin
             packages: protobuf
           - name: windows-x86_64
@@ -130,10 +133,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # tauri-style actions install the target for the *stable* toolchain, but
+      # rust-toolchain.toml pins 1.95 and cargo keeps using 1.95. Install the
+      # target for the pinned toolchain instead.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+
+      - name: Add Rust target
+        run: |
+          rustup target add ${{ matrix.target }}
+          rustup target list --installed
 
       - name: Install protobuf (Linux)
         if: startsWith(matrix.os, 'ubuntu')
@@ -144,6 +153,8 @@ jobs:
 
       - name: Install protobuf (macOS)
         if: startsWith(matrix.os, 'macos')
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
         run: |
           brew install ${{ matrix.packages }}
           protoc --version
@@ -161,11 +172,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: wmcl-desktop-${{ matrix.name }}-${{ hashFiles('Cargo.lock') }}-v1
+          key: wmcl-desktop-${{ matrix.name }}-${{ hashFiles('Cargo.lock') }}-v2
 
       - name: Build
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
         run: |
           cargo build --release --target ${{ matrix.target }} --bin easytier-core --bin easytier-cli
 
@@ -226,7 +235,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: out
+          path: artifacts
+
+      - name: Collect assets
+        run: |
+          mkdir -p out
+          find artifacts -type f -exec cp -v {} out/ \;
+          ls -la out
 
       - name: Publish
         uses: softprops/action-gh-release@v2
@@ -237,5 +252,5 @@ jobs:
             EasyTier desktop binaries for the WMCL launcher.
             - easytier-core / easytier-cli for Linux, macOS and Windows
             TCP STUN list extended with China-reachable nodes.
-          files: out/**/*
+          files: out/*
           overwrite_files: true
