@@ -313,11 +313,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path "out/$pkg" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/easytier-core.exe" "out/$pkg/easytier-core.exe"
           Copy-Item "target/${{ matrix.target }}/release/easytier-cli.exe" "out/$pkg/easytier-cli.exe"
-          # Windows 的 tun 驱动依赖：从 PCL CE 静态包借 Packet.dll / WinDivert64.sys
-          Invoke-WebRequest -Uri "https://staticassets.naids.com/resources/pclce/static/easytier/$pkg-v2.6.4.zip" -OutFile "dep.zip"
-          Expand-Archive -Path "dep.zip" -DestinationPath "dep" -Force
-          Copy-Item "dep/$pkg/Packet.dll" "out/$pkg/Packet.dll"
-          if (Test-Path "dep/$pkg/WinDivert64.sys") { Copy-Item "dep/$pkg/WinDivert64.sys" "out/$pkg/WinDivert64.sys" }
+          # Windows 的 tun/netfilter 依赖来自 EasyTier 官方仓库的 third_party（windivert-rust 用）
+          $third = "easytier/third_party/${{ matrix.arch_token }}"
+          Copy-Item "$third/Packet.dll" "out/$pkg/Packet.dll"
+          if (Test-Path "$third/WinDivert64.sys") { Copy-Item "$third/WinDivert64.sys" "out/$pkg/WinDivert64.sys" }
+          if (Test-Path "$third/wintun.dll") { Copy-Item "$third/wintun.dll" "out/$pkg/wintun.dll" }
           Compress-Archive -Path "out/$pkg" -DestinationPath "out/$pkg-v2.6.4.zip" -Force
           Remove-Item -Recurse -Force "out/$pkg"
           Get-ChildItem "out"
