@@ -38,9 +38,13 @@ jobs:
           - arch: arm64
             target: aarch64-linux-android
             clang: aarch64-linux-android26-clang
+            cc_env: aarch64_linux_android
+            link_env: AARCH64_LINUX_ANDROID
           - arch: x86_64
             target: x86_64-linux-android
             clang: x86_64-linux-android26-clang
+            cc_env: x86_64_linux_android
+            link_env: X86_64_LINUX_ANDROID
     steps:
       - uses: actions/checkout@v4
 
@@ -78,9 +82,9 @@ jobs:
           set -euo pipefail
           TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           TARGET_LINKER="$TOOLCHAIN/${{ matrix.clang }}"
-          export CARGO_TARGET_${{ matrix.target }}_LINKER="$TARGET_LINKER"
-          export "CC_${{ matrix.target }}=$TARGET_LINKER"
-          export "AR_${{ matrix.target }}=$TOOLCHAIN/llvm-ar"
+          export "CARGO_TARGET_${{ matrix.link_env }}_LINKER=$TARGET_LINKER"
+          export "CC_${{ matrix.cc_env }}=$TARGET_LINKER"
+          export "AR_${{ matrix.cc_env }}=$TOOLCHAIN/llvm-ar"
           export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot --target=${{ matrix.target }}"
 
           cargo build --release --target ${{ matrix.target }} --bin easytier-cli
