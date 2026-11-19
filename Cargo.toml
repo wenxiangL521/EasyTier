@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "easytier",
     "easytier-rpc-build",
+    "easytier-contrib/easytier-ffi",
 ]
 default-members = ["easytier"]
 

@@ -1,0 +1,108 @@
+name: wmcl-android
+
+# Builds only what the WMCL launcher needs on Android arm64:
+#   easytier-cli       - NAT test (stun subcommand)
+#   libeasytier_ffi.so - EasyTier runtime used through the C FFI
+# Publishes to release wmcl-android-v2.6.4; WMCL CI/local builds download it.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [wmcl]
+    paths:
+      - '.github/workflows/wmcl-android.yml'
+      - 'Cargo.toml'
+      - 'easytier/src/common/stun.rs'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Android NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26b
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler cmake clang pkg-config
+          protoc --version
+
+      - name: Add Android target
+        run: |
+          rustup target add aarch64-linux-android
+          rustup target list --installed | grep android
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: wmcl-android-${{ hashFiles('Cargo.lock') }}-v1
+
+      - name: Cross compile (CLI + FFI)
+        env:
+          NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          export PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          export CC_aarch64_linux_android="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          export CXX_aarch64_linux_android="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++"
+          export AR_aarch64_linux_android="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
+          export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot --target=aarch64-linux-android26"
+
+          echo "=== easytier-cli ==="
+          cargo build --release --target aarch64-linux-android --bin easytier-cli
+          echo "=== easytier-ffi ==="
+          cargo build --release --target aarch64-linux-android -p easytier-ffi
+
+      - name: Strip
+        env:
+          NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          STRIP="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          cd target/aarch64-linux-android/release
+          "$STRIP" --strip-all easytier-cli
+          "$STRIP" --strip-all libeasytier_ffi.so
+          ls -la easytier-cli libeasytier_ffi.so
+          md5sum easytier-cli libeasytier_ffi.so
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp easytier-cli "$GITHUB_WORKSPACE/out/easytier-cli"
+          cp libeasytier_ffi.so "$GITHUB_WORKSPACE/out/libeasytier_ffi.so"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: wmcl-android-v2.6.4
+          name: WMCL Android EasyTier 2.6.4
+          body: |
+            EasyTier Android arm64 artifacts for the WMCL launcher.
+            - easytier-cli: NAT test
+            - libeasytier_ffi.so: EasyTier runtime (C FFI)
+            Built from the Android branch of this fork; TCP STUN list extended with China-reachable nodes.
+          files: |
+            out/easytier-cli
+            out/libeasytier_ffi.so
+          overwrite_files: true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wmcl-android-easytier
+          path: out/*
+          if-no-files-found: error
