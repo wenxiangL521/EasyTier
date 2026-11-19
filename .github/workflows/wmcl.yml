@@ -1,4 +1,4 @@
-name: wmcl-android
+name: wmcl
 
 # Builds only what the WMCL launcher needs on Android arm64:
 #   easytier-cli       - NAT test (stun subcommand)
@@ -10,7 +10,7 @@ on:
   push:
     branches: [wmcl]
     paths:
-      - '.github/workflows/wmcl-android.yml'
+      - '.github/workflows/wmcl.yml'
       - 'Cargo.toml'
       - 'easytier/src/common/stun.rs'
 
@@ -51,7 +51,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: wmcl-android-${{ hashFiles('Cargo.lock') }}-v1
+          key: wmcl-${{ hashFiles('Cargo.lock') }}-v1
 
       - name: Cross compile (CLI + FFI)
         env:
@@ -88,7 +88,7 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: wmcl-android-v2.6.4
+          tag_name: wmcl-v2.6.4
           name: WMCL Android EasyTier 2.6.4
           body: |
             EasyTier Android arm64 artifacts for the WMCL launcher.
@@ -103,6 +103,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wmcl-android-easytier
+          name: wmcl-easytier
           path: out/*
           if-no-files-found: error
