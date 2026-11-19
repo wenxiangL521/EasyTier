@@ -33,6 +33,7 @@ const DEFAULT_UDP_STUN_SERVERS: &[&str] = &[
 ];
 
 const DEFAULT_TCP_STUN_SERVERS: &[&str] = &[
+    "stun.hitv.com",
     "stun.hot-chilli.net",
     "stun.fitauto.ru",
     "fwa.lifesizecloud.com",
