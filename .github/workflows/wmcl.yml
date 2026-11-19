@@ -99,15 +99,14 @@ jobs:
           cd target/${{ matrix.target }}/release
           "$STRIP" --strip-all easytier-cli
           "$STRIP" --strip-all libeasytier_ffi.so
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            cp easytier-cli "$GITHUB_WORKSPACE/out/easytier-cli"
-            cp libeasytier_ffi.so "$GITHUB_WORKSPACE/out/libeasytier_ffi.so"
-          else
-            cp easytier-cli "$GITHUB_WORKSPACE/out/easytier-cli-x86_64"
-            cp libeasytier_ffi.so "$GITHUB_WORKSPACE/out/libeasytier_ffi-x86_64.so"
-          fi
-          md5sum "$GITHUB_WORKSPACE/out"/*
+          PKG="easytier-android-${{ matrix.arch }}"
+          mkdir -p "$GITHUB_WORKSPACE/out/$PKG"
+          cp easytier-cli "$GITHUB_WORKSPACE/out/$PKG/easytier-cli"
+          cp libeasytier_ffi.so "$GITHUB_WORKSPACE/out/$PKG/libeasytier_ffi.so"
+          cd "$GITHUB_WORKSPACE/out"
+          zip -r "$PKG-v2.6.4.zip" "$PKG"
+          rm -rf "$PKG"
+          ls -la *.zip
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
@@ -330,64 +329,28 @@ jobs:
           path: out/*
           if-no-files-found: error
 
-  publish-android:
-    name: Publish Android release
-    needs: android
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: out
-          pattern: wmcl-android-*
-          merge-multiple: true
-
-      - name: Publish
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: wmcl-android-v2.6.4
-          name: WMCL Android EasyTier 2.6.4
-          body: |
-            EasyTier Android artifacts for the WMCL launcher.
-            - easytier-cli / libeasytier_ffi.so: arm64 (used by the WMCL APK)
-            - easytier-cli-x86_64 / libeasytier_ffi-x86_64.so: x86_64
-            TCP STUN list extended with China-reachable nodes.
-          files: out/*
-          overwrite_files: true
-
-  publish-desktop:
-    name: Publish desktop release
-    needs: [linux, windows, macos]
+  publish:
+    name: Publish release
+    needs: [android, linux, windows, macos]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: out
-          pattern: wmcl-linux-*
-          merge-multiple: true
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: out
-          pattern: wmcl-windows-*
-          merge-multiple: true
-
-      - uses: actions/download-artifact@v4
-        with:
-          path: out
-          pattern: wmcl-macos-*
           merge-multiple: true
 
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: wmcl-desktop-v2.6.4
-          name: WMCL Desktop EasyTier 2.6.4
+          tag_name: wmcl-easytier-v2.6.4
+          name: WMCL EasyTier 2.6.4
           body: |
-            EasyTier desktop binaries for the WMCL launcher.
-            - Linux: x86_64, arm64
-            - Windows: x86_64, arm64
-            - macOS: x86_64, arm64 (cross-compiled on Linux)
-            TCP STUN list expanded with China-reachable nodes.
+            EasyTier artifacts for the WMCL launcher.
+            Desktop: easytier-linux-x86_64-v2.6.4.zip, easytier-linux-aarch64-v2.6.4.zip,
+            easytier-macos-x86_64-v2.6.4.zip, easytier-macos-aarch64-v2.6.4.zip,
+            easytier-windows-x86_64-v2.6.4.zip, easytier-windows-arm64-v2.6.4.zip
+            Android: easytier-android-arm64-v2.6.4.zip, easytier-android-x86_64-v2.6.4.zip
+            TCP STUN list extended with China-reachable nodes.
           files: out/*
           overwrite_files: true
