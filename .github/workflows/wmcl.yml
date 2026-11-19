@@ -1,9 +1,11 @@
 name: wmcl
 
-# Builds only what the WMCL launcher needs on Android arm64:
-#   easytier-cli       - NAT test (stun subcommand)
-#   libeasytier_ffi.so - EasyTier runtime used through the C FFI
-# Publishes to release wmcl-android-v2.6.4; WMCL CI/local builds download it.
+# Builds EasyTier for every platform the WMCL launcher supports.
+#   Android arm64 : easytier-cli + libeasytier_ffi.so
+#   Desktop       : easytier-core + easytier-cli (Linux/macOS x86_64 & arm64, Windows x86_64)
+#
+# Android release : wmcl-android-v2.6.4
+# Desktop release : wmcl-desktop-v2.6.4
 
 on:
   workflow_dispatch:
@@ -12,13 +14,20 @@ on:
     paths:
       - '.github/workflows/wmcl.yml'
       - 'Cargo.toml'
-      - 'easytier/src/common/stun.rs'
+      - 'Cargo.lock'
+      - 'easytier/**'
+      - 'easytier-rpc-build/**'
+      - 'easytier-contrib/**'
 
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  build:
+  android:
+    name: Android arm64
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -51,9 +60,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: wmcl-${{ hashFiles('Cargo.lock') }}-v1
+          key: wmcl-android-${{ hashFiles('Cargo.lock') }}-v1
 
-      - name: Cross compile (CLI + FFI)
+      - name: Cross compile
         env:
           NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: |
@@ -65,9 +74,7 @@ jobs:
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
           export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot --target=aarch64-linux-android26"
 
-          echo "=== easytier-cli ==="
           cargo build --release --target aarch64-linux-android --bin easytier-cli
-          echo "=== easytier-ffi ==="
           cargo build --release --target aarch64-linux-android -p easytier-ffi
 
       - name: Strip
@@ -79,30 +86,156 @@ jobs:
           cd target/aarch64-linux-android/release
           "$STRIP" --strip-all easytier-cli
           "$STRIP" --strip-all libeasytier_ffi.so
-          ls -la easytier-cli libeasytier_ffi.so
-          md5sum easytier-cli libeasytier_ffi.so
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          cp easytier-cli "$GITHUB_WORKSPACE/out/easytier-cli"
-          cp libeasytier_ffi.so "$GITHUB_WORKSPACE/out/libeasytier_ffi.so"
+          mkdir -p "$GITHUB_WORKSPACE/out/android"
+          cp easytier-cli "$GITHUB_WORKSPACE/out/android/easytier-cli"
+          cp libeasytier_ffi.so "$GITHUB_WORKSPACE/out/android/libeasytier_ffi.so"
+          md5sum "$GITHUB_WORKSPACE/out/android"/*
 
-      - name: Publish release
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wmcl-android
+          path: out/android/*
+          if-no-files-found: error
+
+  desktop:
+    name: Desktop ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            packages: protobuf-compiler
+          - name: linux-aarch64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            packages: protobuf-compiler gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+          - name: macos-x86_64
+            os: macos-13
+            target: x86_64-apple-darwin
+            packages: protobuf
+          - name: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            packages: protobuf
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            packages: ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install protobuf (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+          protoc --version
+
+      - name: Install protobuf (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew install ${{ matrix.packages }}
+          protoc --version
+
+      - name: Install protobuf (Windows)
+        if: startsWith(matrix.os, 'windows')
+        run: |
+          choco install protoc -y
+          protoc --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: wmcl-desktop-${{ matrix.name }}-${{ hashFiles('Cargo.lock') }}-v1
+
+      - name: Build
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+        run: |
+          cargo build --release --target ${{ matrix.target }} --bin easytier-core --bin easytier-cli
+
+      - name: Package (Linux/macOS)
+        if: ${{ !startsWith(matrix.os, 'windows') }}
+        run: |
+          set -euo pipefail
+          cd target/${{ matrix.target }}/release
+          strip easytier-core easytier-cli 2>/dev/null || true
+          mkdir -p "$GITHUB_WORKSPACE/out/desktop"
+          cp easytier-core "$GITHUB_WORKSPACE/out/desktop/easytier-core-${{ matrix.name }}"
+          cp easytier-cli "$GITHUB_WORKSPACE/out/desktop/easytier-cli-${{ matrix.name }}"
+          ls -la "$GITHUB_WORKSPACE/out/desktop"
+
+      - name: Package (Windows)
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out/desktop | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/easytier-core.exe" "out/desktop/easytier-core-${{ matrix.name }}.exe"
+          Copy-Item "target/${{ matrix.target }}/release/easytier-cli.exe" "out/desktop/easytier-cli-${{ matrix.name }}.exe"
+          Get-ChildItem out/desktop
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wmcl-desktop-${{ matrix.name }}
+          path: out/desktop/*
+          if-no-files-found: error
+
+  publish-android:
+    name: Publish Android release
+    needs: android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wmcl-android
+          path: out
+
+      - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: wmcl-v2.6.4
+          tag_name: wmcl-android-v2.6.4
           name: WMCL Android EasyTier 2.6.4
           body: |
             EasyTier Android arm64 artifacts for the WMCL launcher.
             - easytier-cli: NAT test
             - libeasytier_ffi.so: EasyTier runtime (C FFI)
-            Built from the Android branch of this fork; TCP STUN list extended with China-reachable nodes.
-          files: |
-            out/easytier-cli
-            out/libeasytier_ffi.so
+            TCP STUN list extended with China-reachable nodes.
+          files: out/*
           overwrite_files: true
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+  publish-desktop:
+    name: Publish desktop release
+    needs: desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          name: wmcl-easytier
-          path: out/*
-          if-no-files-found: error
+          path: out
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: wmcl-desktop-v2.6.4
+          name: WMCL Desktop EasyTier 2.6.4
+          body: |
+            EasyTier desktop binaries for the WMCL launcher.
+            - easytier-core / easytier-cli for Linux, macOS and Windows
+            TCP STUN list extended with China-reachable nodes.
+          files: out/**/*
+          overwrite_files: true
