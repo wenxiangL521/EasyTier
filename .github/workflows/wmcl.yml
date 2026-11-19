@@ -1,11 +1,11 @@
 name: wmcl
 
-# Builds EasyTier for every platform the WMCL launcher supports.
-#   Android arm64 : easytier-cli + libeasytier_ffi.so
-#   Desktop       : easytier-core + easytier-cli (Linux/macOS x86_64 & arm64, Windows x86_64)
+# Builds EasyTier for every platform/arch the WMCL launcher supports.
+#   Android arm64 / x86_64 : easytier-cli + libeasytier_ffi.so
+#   Desktop Linux / macOS / Windows (x64 + arm64): easytier-core + easytier-cli
+# macOS is cross-compiled on Linux with cargo-zigbuild (no macOS runner needed).
 #
-# Android release : wmcl-android-v2.6.4
-# Desktop release : wmcl-desktop-v2.6.4
+# Releases: wmcl-android-v2.6.4 and wmcl-desktop-v2.6.4
 
 on:
   workflow_dispatch:
@@ -15,7 +15,6 @@ on:
       - '.github/workflows/wmcl.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'rust-toolchain.toml'
       - 'easytier/**'
       - 'easytier-rpc-build/**'
       - 'easytier-contrib/**'
@@ -25,12 +24,25 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: '11.0'
 
 jobs:
   android:
-    name: Android arm64
+    name: Android ${{ matrix.arch }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-linux-android
+            clang: aarch64-linux-android26-clang
+            ar: llvm-ar
+          - arch: x86_64
+            target: x86_64-linux-android
+            clang: x86_64-linux-android26-clang
+            ar: llvm-ar
     steps:
       - uses: actions/checkout@v4
 
@@ -50,10 +62,7 @@ jobs:
           protoc --version
 
       - name: Add Android target
-        run: |
-          # rust-toolchain.toml pins 1.95, so add the target for that toolchain.
-          rustup target add aarch64-linux-android
-          rustup target list --installed | grep android
+        run: rustup target add ${{ matrix.target }}
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -62,7 +71,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: wmcl-android-${{ hashFiles('Cargo.lock') }}-v1
+          key: wmcl-android-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}-v2
 
       - name: Cross compile
         env:
@@ -70,97 +79,186 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-          export CC_aarch64_linux_android="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
-          export CXX_aarch64_linux_android="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++"
-          export AR_aarch64_linux_android="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
-          export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot --target=aarch64-linux-android26"
+          export CC_${{ matrix.target }}="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.clang }}"
+          export AR_${{ matrix.target }}="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.ar }}"
+          export CARGO_TARGET_${{ matrix.target }}_LINKER="$CC_${{ matrix.target }}"
+          export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot --target=${{ matrix.clang }}"
 
-          cargo build --release --target aarch64-linux-android --bin easytier-cli
-          cargo build --release --target aarch64-linux-android -p easytier-ffi
+          cargo build --release --target ${{ matrix.target }} --bin easytier-cli
+          cargo build --release --target ${{ matrix.target }} -p easytier-ffi
 
-      - name: Strip
+      - name: Strip and package
         env:
           NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           set -euo pipefail
           STRIP="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-          cd target/aarch64-linux-android/release
+          cd target/${{ matrix.target }}/release
           "$STRIP" --strip-all easytier-cli
           "$STRIP" --strip-all libeasytier_ffi.so
-          mkdir -p "$GITHUB_WORKSPACE/out/android"
-          cp easytier-cli "$GITHUB_WORKSPACE/out/android/easytier-cli"
-          cp libeasytier_ffi.so "$GITHUB_WORKSPACE/out/android/libeasytier_ffi.so"
-          md5sum "$GITHUB_WORKSPACE/out/android"/*
+          mkdir -p "$GITHUB_WORKSPACE/out/android-${{ matrix.arch }}"
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            cp easytier-cli "$GITHUB_WORKSPACE/out/android-${{ matrix.arch }}/easytier-cli"
+            cp libeasytier_ffi.so "$GITHUB_WORKSPACE/out/android-${{ matrix.arch }}/libeasytier_ffi.so"
+          else
+            cp easytier-cli "$GITHUB_WORKSPACE/out/android-${{ matrix.arch }}/easytier-cli-x86_64"
+            cp libeasytier_ffi.so "$GITHUB_WORKSPACE/out/android-${{ matrix.arch }}/libeasytier_ffi-x86_64.so"
+          fi
+          md5sum "$GITHUB_WORKSPACE/out/android-${{ matrix.arch }}"/*
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wmcl-android
-          path: out/android/*
+          name: wmcl-android-${{ matrix.arch }}
+          path: out/android-${{ matrix.arch }}/*
           if-no-files-found: error
 
-  desktop:
-    name: Desktop ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: linux-x86_64
-            os: ubuntu-latest
+          - arch: x86_64
+            runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             packages: protobuf-compiler
-          - name: linux-aarch64
-            # Native arm64 Linux runner: no cross linker needed.
-            os: ubuntu-24.04-arm
+          - arch: arm64
+            runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             packages: protobuf-compiler
-          - name: macos-x86_64
-            # macos-13 has been retired; macos-latest builds both Darwin targets.
-            os: macos-latest
-            target: x86_64-apple-darwin
-            packages: protobuf
-          - name: macos-arm64
-            os: macos-latest
-            target: aarch64-apple-darwin
-            packages: protobuf
-          - name: windows-x86_64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            packages: ''
     steps:
       - uses: actions/checkout@v4
 
-      # tauri-style actions install the target for the *stable* toolchain, but
-      # rust-toolchain.toml pins 1.95 and cargo keeps using 1.95. Install the
-      # target for the pinned toolchain instead.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      - name: Add Rust target
-        run: |
-          rustup target add ${{ matrix.target }}
-          rustup target list --installed
-
-      - name: Install protobuf (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.packages }}
           protoc --version
 
-      - name: Install protobuf (macOS)
-        if: startsWith(matrix.os, 'macos')
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: 1
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: wmcl-linux-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}-v2
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --bin easytier-core --bin easytier-cli
+
+      - name: Package
         run: |
-          brew install ${{ matrix.packages }}
+          set -euo pipefail
+          cd target/${{ matrix.target }}/release
+          strip easytier-core easytier-cli || true
+          mkdir -p "$GITHUB_WORKSPACE/out/linux-${{ matrix.arch }}"
+          cp easytier-core "$GITHUB_WORKSPACE/out/linux-${{ matrix.arch }}/easytier-core-linux-${{ matrix.arch }}"
+          cp easytier-cli "$GITHUB_WORKSPACE/out/linux-${{ matrix.arch }}/easytier-cli-linux-${{ matrix.arch }}"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wmcl-linux-${{ matrix.arch }}
+          path: out/linux-${{ matrix.arch }}/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS ${{ matrix.arch }} (cross on Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-apple-darwin
+          - arch: arm64
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler cmake clang pkg-config llvm
           protoc --version
 
-      - name: Install protobuf (Windows)
-        if: startsWith(matrix.os, 'windows')
+      - name: Install zig and cargo-zigbuild
+        run: |
+          python3 -m pip install --break-system-packages ziglang cargo-zigbuild
+          python3 -m ziglang version || zig version
+          cargo-zigbuild --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: wmcl-macos-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}-v1
+
+      - name: Cross compile
+        env:
+          CC_x86_64_apple_darwin: zig cc -target x86_64-macos
+          AR_x86_64_apple_darwin: zig ar
+          CC_aarch64_apple_darwin: zig cc -target aarch64-macos
+          AR_aarch64_apple_darwin: zig ar
+        run: |
+          cargo zigbuild --release --target ${{ matrix.target }} --bin easytier-core --bin easytier-cli
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd target/${{ matrix.target }}/release
+          llvm-strip easytier-core easytier-cli || true
+          mkdir -p "$GITHUB_WORKSPACE/out/macos-${{ matrix.arch }}"
+          cp easytier-core "$GITHUB_WORKSPACE/out/macos-${{ matrix.arch }}/easytier-core-macos-${{ matrix.arch }}"
+          cp easytier-cli "$GITHUB_WORKSPACE/out/macos-${{ matrix.arch }}/easytier-cli-macos-${{ matrix.arch }}"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wmcl-macos-${{ matrix.arch }}
+          path: out/macos-${{ matrix.arch }}/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install protobuf
         run: |
           choco install protoc -y
           protoc --version
@@ -172,37 +270,24 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: wmcl-desktop-${{ matrix.name }}-${{ hashFiles('Cargo.lock') }}-v2
+          key: wmcl-windows-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}-v2
 
       - name: Build
-        run: |
-          cargo build --release --target ${{ matrix.target }} --bin easytier-core --bin easytier-cli
+        run: cargo build --release --target ${{ matrix.target }} --bin easytier-core --bin easytier-cli
 
-      - name: Package (Linux/macOS)
-        if: ${{ !startsWith(matrix.os, 'windows') }}
-        run: |
-          set -euo pipefail
-          cd target/${{ matrix.target }}/release
-          strip easytier-core easytier-cli 2>/dev/null || true
-          mkdir -p "$GITHUB_WORKSPACE/out/desktop"
-          cp easytier-core "$GITHUB_WORKSPACE/out/desktop/easytier-core-${{ matrix.name }}"
-          cp easytier-cli "$GITHUB_WORKSPACE/out/desktop/easytier-cli-${{ matrix.name }}"
-          ls -la "$GITHUB_WORKSPACE/out/desktop"
-
-      - name: Package (Windows)
-        if: startsWith(matrix.os, 'windows')
+      - name: Package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path out/desktop | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/easytier-core.exe" "out/desktop/easytier-core-${{ matrix.name }}.exe"
-          Copy-Item "target/${{ matrix.target }}/release/easytier-cli.exe" "out/desktop/easytier-cli-${{ matrix.name }}.exe"
-          Get-ChildItem out/desktop
+          New-Item -ItemType Directory -Force -Path "out/windows-${{ matrix.arch }}" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/easytier-core.exe" "out/windows-${{ matrix.arch }}/easytier-core-windows-${{ matrix.arch }}.exe"
+          Copy-Item "target/${{ matrix.target }}/release/easytier-cli.exe" "out/windows-${{ matrix.arch }}/easytier-cli-windows-${{ matrix.arch }}.exe"
+          Get-ChildItem "out/windows-${{ matrix.arch }}"
 
-      - name: Upload desktop artifacts
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wmcl-desktop-${{ matrix.name }}
-          path: out/desktop/*
+          name: wmcl-windows-${{ matrix.arch }}
+          path: out/windows-${{ matrix.arch }}/*
           if-no-files-found: error
 
   publish-android:
@@ -212,8 +297,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: wmcl-android
           path: out
+          merge-multiple: true
 
       - name: Publish
         uses: softprops/action-gh-release@v2
@@ -221,27 +306,23 @@ jobs:
           tag_name: wmcl-android-v2.6.4
           name: WMCL Android EasyTier 2.6.4
           body: |
-            EasyTier Android arm64 artifacts for the WMCL launcher.
-            - easytier-cli: NAT test
-            - libeasytier_ffi.so: EasyTier runtime (C FFI)
+            EasyTier Android artifacts for the WMCL launcher.
+            - easytier-cli / libeasytier_ffi.so: arm64 (used by the WMCL APK)
+            - easytier-cli-x86_64 / libeasytier_ffi-x86_64.so: x86_64
             TCP STUN list extended with China-reachable nodes.
           files: out/*
           overwrite_files: true
 
   publish-desktop:
     name: Publish desktop release
-    needs: desktop
+    needs: [linux, windows, macos]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: artifacts
-
-      - name: Collect assets
-        run: |
-          mkdir -p out
-          find artifacts -type f -exec cp -v {} out/ \;
-          ls -la out
+          path: out
+          merge-multiple: true
 
       - name: Publish
         uses: softprops/action-gh-release@v2
@@ -250,7 +331,9 @@ jobs:
           name: WMCL Desktop EasyTier 2.6.4
           body: |
             EasyTier desktop binaries for the WMCL launcher.
-            - easytier-core / easytier-cli for Linux, macOS and Windows
+            - Linux: x86_64, arm64
+            - Windows: x86_64, arm64
+            - macOS: x86_64, arm64 (cross-compiled on Linux)
             TCP STUN list extended with China-reachable nodes.
-          files: out/*
+          files: out/**/*
           overwrite_files: true
