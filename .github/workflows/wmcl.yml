@@ -125,9 +125,11 @@ jobs:
       matrix:
         include:
           - arch: x86_64
+            arch_token: x86_64
             runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - arch: arm64
+            arch_token: aarch64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
     steps:
@@ -139,7 +141,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler cmake clang pkg-config
+          sudo apt-get install -y protobuf-compiler cmake clang pkg-config zip
           protoc --version
 
       - name: Add target
@@ -162,9 +164,14 @@ jobs:
           set -euo pipefail
           cd target/${{ matrix.target }}/release
           strip easytier-core easytier-cli || true
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          cp easytier-core "$GITHUB_WORKSPACE/out/easytier-core-linux-${{ matrix.arch }}"
-          cp easytier-cli "$GITHUB_WORKSPACE/out/easytier-cli-linux-${{ matrix.arch }}"
+          PKG="easytier-linux-${{ matrix.arch_token }}"
+          mkdir -p "$GITHUB_WORKSPACE/out/$PKG"
+          cp easytier-core "$GITHUB_WORKSPACE/out/$PKG/easytier-core"
+          cp easytier-cli "$GITHUB_WORKSPACE/out/$PKG/easytier-cli"
+          cd "$GITHUB_WORKSPACE/out"
+          zip -r "$PKG-v2.6.4.zip" "$PKG"
+          rm -rf "$PKG"
+          ls -la *.zip
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
@@ -183,8 +190,10 @@ jobs:
       matrix:
         include:
           - arch: x86_64
+            arch_token: x86_64
             target: x86_64-apple-darwin
           - arch: arm64
+            arch_token: aarch64
             target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
@@ -195,7 +204,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler cmake clang libclang-dev pkg-config llvm curl xz-utils
+          sudo apt-get install -y protobuf-compiler cmake clang libclang-dev pkg-config llvm curl xz-utils zip
           protoc --version
 
       - name: Add macOS target
@@ -242,9 +251,14 @@ jobs:
           set -euo pipefail
           cd target/${{ matrix.target }}/release
           llvm-strip easytier-core easytier-cli || true
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          cp easytier-core "$GITHUB_WORKSPACE/out/easytier-core-macos-${{ matrix.arch }}"
-          cp easytier-cli "$GITHUB_WORKSPACE/out/easytier-cli-macos-${{ matrix.arch }}"
+          PKG="easytier-macos-${{ matrix.arch_token }}"
+          mkdir -p "$GITHUB_WORKSPACE/out/$PKG"
+          cp easytier-core "$GITHUB_WORKSPACE/out/$PKG/easytier-core"
+          cp easytier-cli "$GITHUB_WORKSPACE/out/$PKG/easytier-cli"
+          cd "$GITHUB_WORKSPACE/out"
+          zip -r "$PKG-v2.6.4.zip" "$PKG"
+          rm -rf "$PKG"
+          ls -la *.zip
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -262,8 +276,10 @@ jobs:
       matrix:
         include:
           - arch: x86_64
+            arch_token: x86_64
             target: x86_64-pc-windows-msvc
           - arch: arm64
+            arch_token: arm64
             target: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
@@ -294,9 +310,17 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "out" | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/easytier-core.exe" "out/easytier-core-windows-${{ matrix.arch }}.exe"
-          Copy-Item "target/${{ matrix.target }}/release/easytier-cli.exe" "out/easytier-cli-windows-${{ matrix.arch }}.exe"
+          $pkg = "easytier-windows-${{ matrix.arch_token }}"
+          New-Item -ItemType Directory -Force -Path "out/$pkg" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/easytier-core.exe" "out/$pkg/easytier-core.exe"
+          Copy-Item "target/${{ matrix.target }}/release/easytier-cli.exe" "out/$pkg/easytier-cli.exe"
+          # Windows 的 tun 驱动依赖：从 PCL CE 静态包借 Packet.dll / WinDivert64.sys
+          Invoke-WebRequest -Uri "https://staticassets.naids.com/resources/pclce/static/easytier/$pkg-v2.6.4.zip" -OutFile "dep.zip"
+          Expand-Archive -Path "dep.zip" -DestinationPath "dep" -Force
+          Copy-Item "dep/$pkg/Packet.dll" "out/$pkg/Packet.dll"
+          if (Test-Path "dep/$pkg/WinDivert64.sys") { Copy-Item "dep/$pkg/WinDivert64.sys" "out/$pkg/WinDivert64.sys" }
+          Compress-Archive -Path "out/$pkg" -DestinationPath "out/$pkg-v2.6.4.zip" -Force
+          Remove-Item -Recurse -Force "out/$pkg"
           Get-ChildItem "out"
 
       - name: Upload Windows artifacts
